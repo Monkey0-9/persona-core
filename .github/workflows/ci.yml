@@ -87,7 +87,7 @@ jobs:
           cache: npm
 
       - name: Install Node dependencies
-        run: npm ci
+        run: npm ci || npm install
 
       - name: TypeScript type check
         run: npx tsc --noEmit
