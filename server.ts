@@ -52,8 +52,15 @@ function findFreeLocalPort(preferredPort: number): Promise<number> {
 }
 
 function resolveUvicornBin(): string {
-  const venvUvicorn = path.resolve(process.cwd(), '.venv/bin/uvicorn');
-  return fs.existsSync(venvUvicorn) ? venvUvicorn : 'uvicorn';
+  const winUvicorn = path.resolve(process.cwd(), '.venv/Scripts/uvicorn.exe');
+  if (process.platform === 'win32' && fs.existsSync(winUvicorn)) {
+    return winUvicorn;
+  }
+  const posixUvicorn = path.resolve(process.cwd(), '.venv/bin/uvicorn');
+  if (fs.existsSync(posixUvicorn)) {
+    return posixUvicorn;
+  }
+  return 'uvicorn';
 }
 
 async function ensureFastApiRunning(): Promise<void> {
@@ -71,7 +78,7 @@ async function ensureFastApiRunning(): Promise<void> {
 
   fastapiChild = spawn(
     resolveUvicornBin(),
-    ['mall_seg.api:app', '--host', host, '--port', String(port)],
+    ['mall_seg.api:app', '--host', host, '--port', String(port), '--timeout-keep-alive', '60'],
     {
       cwd: process.cwd(),
       env: {
@@ -87,7 +94,7 @@ async function ensureFastApiRunning(): Promise<void> {
     if (msg) console.error(`[fastapi] ${msg}`);
   });
 
-  for (let i = 0; i < 80; i++) {
+  for (let i = 0; i < 140; i++) {
     if (await isMallSegFastApiHealthy(activeFastApiUrl)) {
       console.log(`[bff] Verified FastAPI backend at ${activeFastApiUrl}`);
       return;
@@ -187,7 +194,7 @@ async function startServer() {
       }
 
       const incomingCt = req.headers['content-type'] || '';
-      let bodyToSend: string | Uint8Array | undefined;
+      let bodyToSend: string | Blob | undefined;
       if (req.method !== 'GET' && req.method !== 'HEAD') {
         if (incomingCt.includes('multipart/form-data')) {
           headers['Content-Type'] = incomingCt;
@@ -195,7 +202,9 @@ async function startServer() {
           for await (const chunk of req) {
             chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
           }
-          bodyToSend = new Uint8Array(Buffer.concat(chunks));
+          bodyToSend = new Blob([new Uint8Array(Buffer.concat(chunks))], {
+            type: incomingCt,
+          });
         } else {
           headers['Content-Type'] = 'application/json';
           bodyToSend = JSON.stringify(req.body ?? {});
@@ -204,7 +213,7 @@ async function startServer() {
 
       const upstream = await fetch(targetUrl, {
         method: req.method,
-        headers,
+        headers: { ...headers, Connection: 'close' },
         body: bodyToSend,
         signal: AbortSignal.timeout(45000),
       });
@@ -238,6 +247,7 @@ async function startServer() {
     });
   }
 
+  await backendReadyPromise;
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`[bff] Listening on http://0.0.0.0:${PORT} (FastAPI target ${activeFastApiUrl})`);
   });

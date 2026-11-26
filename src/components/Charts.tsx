@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import {
   SEGMENT_PALETTE,
+  type AgeCohortStat,
+  type AlgorithmConsensus,
   type AlgorithmPoint,
   type CustomerRecord,
   type GmmEllipse,
@@ -10,7 +12,7 @@ import {
   type WardDendrogram,
 } from '../types';
 
-export type AlgorithmView = 'kmeans' | 'ward' | 'gmm' | 'dbscan';
+export type AlgorithmView = 'kmeans' | 'ward' | 'gmm' | 'dbscan' | 'hdbscan';
 
 function resolvePointColorAndNoise(
   pt: CustomerRecord,
@@ -41,7 +43,8 @@ function resolvePointColorAndNoise(
     const cid = match.gmm_cluster_id;
     return { color: SEGMENT_PALETTE[Math.abs(cid) % SEGMENT_PALETTE.length], clusterId: cid, isNoise: false };
   }
-  const dbId = match.dbscan_cluster_id;
+  const dbId =
+    algorithmView === 'hdbscan' ? (match.hdbscan_cluster_id ?? -1) : match.dbscan_cluster_id;
   if (dbId === -1) {
     return { color: '#BE123C', clusterId: -1, isNoise: true };
   }
@@ -1034,6 +1037,247 @@ export function MetricSweepChart({
           {minY >= 100 ? minY.toFixed(0) : minY.toFixed(2)}
         </text>
       </svg>
+    </div>
+  );
+}
+
+export function FeaturePairScatterChart({
+  customers,
+  colorMap,
+  xAxis,
+  yAxis,
+  algorithmView = 'kmeans',
+  algorithmPoints = [],
+  highlightedClusterId = null,
+  onHover,
+}: {
+  customers: CustomerRecord[];
+  colorMap: Map<string, string>;
+  xAxis: 'age' | 'annual_income_k';
+  yAxis: 'spending_score' | 'annual_income_k';
+  algorithmView?: AlgorithmView;
+  algorithmPoints?: AlgorithmPoint[];
+  highlightedClusterId?: number | null;
+  onHover?: (c: CustomerRecord | null) => void;
+}) {
+  const [hovered, setHovered] = useState<CustomerRecord | null>(null);
+  const width = 420;
+  const height = 270;
+  const padL = 44;
+  const padR = 16;
+  const padT = 18;
+  const padB = 38;
+
+  const getX = (c: CustomerRecord) => (xAxis === 'age' ? c.age : c.annual_income_k);
+  const getY = (c: CustomerRecord) => (yAxis === 'spending_score' ? c.spending_score : c.annual_income_k);
+  const xs = customers.map(getX);
+  const ys = customers.map(getY);
+
+  const minX = Math.max(0, Math.floor((Math.min(...(xs.length ? xs : [15])) - 4) / 5) * 5);
+  const maxX = Math.max(minX + 20, Math.ceil((Math.max(...(xs.length ? xs : [100])) + 4) / 5) * 5);
+  const minY = yAxis === 'spending_score' ? 0 : Math.max(0, Math.floor((Math.min(...(ys.length ? ys : [15])) - 5) / 10) * 10);
+  const maxY = yAxis === 'spending_score' ? 102 : Math.max(minY + 30, Math.ceil((Math.max(...(ys.length ? ys : [140])) + 5) / 10) * 10);
+
+  const mapX = (x: number) => padL + ((x - minX) / Math.max(maxX - minX, 1)) * (width - padL - padR);
+  const mapY = (y: number) => height - padB - ((y - minY) / Math.max(maxY - minY, 1)) * (height - padT - padB);
+
+  const algoLookup = new Map<string, AlgorithmPoint>();
+  for (const ap of algorithmPoints) {
+    if (ap.customer_ref) algoLookup.set(ap.customer_ref, ap);
+  }
+
+  return (
+    <svg
+      viewBox={`0 0 ${width} ${height}`}
+      className="w-full h-auto bg-[#FAF9F6] rounded-lg border border-[#E4E2DC]"
+    >
+      <line x1={padL} y1={height - padB} x2={width - padR} y2={height - padB} stroke="#C9C6BE" strokeWidth="1" />
+      <line x1={padL} y1={padT} x2={padL} y2={height - padB} stroke="#C9C6BE" strokeWidth="1" />
+
+      {customers.map((pt) => {
+        const cx = mapX(getX(pt));
+        const cy = mapY(getY(pt));
+        const { color, clusterId, isNoise } = resolvePointColorAndNoise(
+          pt,
+          algorithmView,
+          algoLookup,
+          colorMap
+        );
+        const dimmed = highlightedClusterId !== null && highlightedClusterId !== clusterId;
+        const opacity = dimmed ? 0.16 : 0.85;
+        return (
+          <g
+            key={pt.id}
+            onMouseEnter={() => {
+              setHovered(pt);
+              onHover?.(pt);
+            }}
+            onMouseLeave={() => {
+              setHovered(null);
+              onHover?.(null);
+            }}
+            className="cursor-pointer"
+          >
+            {isNoise ? (
+              <polygon
+                points={`${cx},${cy - 4.5} ${cx + 4.5},${cy} ${cx},${cy + 4.5} ${cx - 4.5},${cy}`}
+                fill="#FFFFFF"
+                stroke="#BE123C"
+                strokeWidth="1.4"
+                opacity={opacity}
+              />
+            ) : pt.gender === 'Male' ? (
+              <polygon
+                points={`${cx},${cy - 4} ${cx + 3.8},${cy + 3.2} ${cx - 3.8},${cy + 3.2}`}
+                fill={color}
+                fillOpacity={opacity}
+                stroke="#FFFFFF"
+                strokeWidth="0.6"
+              />
+            ) : (
+              <circle
+                cx={cx}
+                cy={cy}
+                r={3.5}
+                fill={color}
+                fillOpacity={opacity}
+                stroke="#FFFFFF"
+                strokeWidth="0.6"
+              />
+            )}
+          </g>
+        );
+      })}
+
+      {hovered && (
+        <g pointerEvents="none">
+          <rect
+            x={padL + 8}
+            y={padT + 4}
+            width={210}
+            height={22}
+            rx={4}
+            fill="#141413"
+            fillOpacity={0.92}
+          />
+          <text x={padL + 14} y={padT + 18} fill="#FFFFFF" fontSize="9.5" className="font-mono-tabular">
+            {hovered.persona_name} · {hovered.gender} · {hovered.age}y · ${hovered.annual_income_k}k · Sp {hovered.spending_score}
+          </text>
+        </g>
+      )}
+
+      <text x={(padL + width - padR) / 2} y={height - 10} textAnchor="middle" fill="#5C5B56" fontSize="10">
+        {xAxis === 'age' ? 'Age (Years)' : 'Annual Income (k$)'}
+      </text>
+      <text
+        x={14}
+        y={(padT + height - padB) / 2}
+        textAnchor="middle"
+        fill="#5C5B56"
+        fontSize="10"
+        transform={`rotate(-90 14 ${(padT + height - padB) / 2})`}
+      >
+        {yAxis === 'spending_score' ? 'Spending Score (1–100)' : 'Annual Income (k$)'}
+      </text>
+      <text x={padL} y={height - 24} fill="#8A8880" fontSize="8.5" className="font-mono-tabular">
+        {minX}
+      </text>
+      <text x={width - padR} y={height - 24} textAnchor="end" fill="#8A8880" fontSize="8.5" className="font-mono-tabular">
+        {maxX}
+      </text>
+      <text x={padL - 4} y={padT + 5} textAnchor="end" fill="#8A8880" fontSize="8.5" className="font-mono-tabular">
+        {maxY}
+      </text>
+      <text x={padL - 4} y={height - padB} textAnchor="end" fill="#8A8880" fontSize="8.5" className="font-mono-tabular">
+        {minY}
+      </text>
+    </svg>
+  );
+}
+
+export function AgeCohortChart({ cohorts }: { cohorts: AgeCohortStat[] }) {
+  if (!cohorts.length) return null;
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between text-xs text-[#64635E]">
+        <span>Age Bracket Spending vs. Income</span>
+        <span className="font-mono-tabular text-[11px]">Avg Income (k$) · Avg Spending</span>
+      </div>
+      <div className="space-y-2">
+        {cohorts.map((c) => (
+          <div key={c.cohort} className="space-y-1">
+            <div className="flex justify-between text-xs">
+              <span className="font-medium text-[#141413] font-mono-tabular">
+                {c.cohort} yrs (n={c.count})
+              </span>
+              <span className="font-mono-tabular text-[#5C5B56]">
+                ${c.mean_income.toFixed(0)}k · Spend {c.mean_spending.toFixed(1)}
+              </span>
+            </div>
+            <div className="grid grid-cols-2 gap-1.5">
+              <div className="h-2 bg-[#F1EFE9] rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-[#047857] rounded-full"
+                  style={{ width: `${Math.min(100, (c.mean_income / 120) * 100)}%` }}
+                />
+              </div>
+              <div className="h-2 bg-[#F1EFE9] rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-[#B45309] rounded-full"
+                  style={{ width: `${Math.min(100, c.mean_spending)}%` }}
+                />
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export function ConsensusMatrixChart({ consensus }: { consensus: AlgorithmConsensus }) {
+  const { algorithms, ari_matrix } = consensus;
+  if (!algorithms.length) return null;
+
+  return (
+    <div className="overflow-x-auto">
+      <div
+        className="grid gap-1.5 text-xs min-w-[440px]"
+        style={{ gridTemplateColumns: `110px repeat(${algorithms.length}, minmax(0, 1fr))` }}
+      >
+        <div className="p-2 text-[10px] font-mono-tabular uppercase text-[#8A8880] flex items-center">
+          ARI Matrix
+        </div>
+        {algorithms.map((alg) => (
+          <div
+            key={`h-${alg}`}
+            className="p-2 text-center font-medium text-[#5C5B56] bg-[#FAF9F6] rounded border border-[#E4E2DC] truncate"
+          >
+            {alg}
+          </div>
+        ))}
+        {algorithms.map((rowAlg) => (
+          <div key={`r-${rowAlg}`} className="contents">
+            <div className="p-2 font-medium text-[#5C5B56] bg-[#FAF9F6] rounded border border-[#E4E2DC] flex items-center truncate">
+              {rowAlg}
+            </div>
+            {algorithms.map((colAlg) => {
+              const val = ari_matrix[rowAlg]?.[colAlg] ?? 0;
+              const bg = `rgba(4, 120, 87, ${Math.min(0.88, 0.08 + Math.max(0, val) * 0.78)})`;
+              const txt = val > 0.55 ? '#FFFFFF' : '#141413';
+              return (
+                <div
+                  key={`${rowAlg}-${colAlg}`}
+                  style={{ backgroundColor: bg, color: txt }}
+                  className="p-2 rounded text-center font-mono-tabular font-semibold border border-[#E4E2DC]/60"
+                >
+                  {val.toFixed(2)}
+                </div>
+              );
+            })}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

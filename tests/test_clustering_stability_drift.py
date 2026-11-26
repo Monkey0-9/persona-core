@@ -38,7 +38,8 @@ def test_clustering_suite_stability_and_personas(tmp_path: Path) -> None:
         kmeans_n_init=25,
         seed=42,
     )
-    assert len(suite.benchmarks) == 4
+    assert len(suite.benchmarks) == 5
+    assert "ari_matrix" in suite.consensus
     assert len(suite.kmeans_sweep) == 7
     assert len(suite.gmm_sweep) == 7
     assert suite.ward_linkage_matrix.shape == (199, 4)

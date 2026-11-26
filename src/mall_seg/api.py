@@ -77,6 +77,7 @@ from mall_seg.observability import (
 )
 from mall_seg.personas import (
     ModelSchemaMismatchError,
+    compute_counterfactual_path,
     execute_segmentation_workflow,
     score_customer_records,
     verify_bundle_schema_compatibility,
@@ -117,6 +118,15 @@ class CustomerScoreRequest(StrictBaseModel):
     age: int = Field(ge=16, le=100)
     annual_income_k: float = Field(ge=5.0, le=500.0)
     spending_score: float = Field(ge=1.0, le=100.0)
+
+
+class CounterfactualRequest(StrictBaseModel):
+    customer_ref: str | None = Field(default=None, max_length=64)
+    gender: Literal["Male", "Female"]
+    age: int = Field(ge=16, le=100)
+    annual_income_k: float = Field(ge=5.0, le=500.0)
+    spending_score: float = Field(ge=1.0, le=100.0)
+    target_persona_key: str | None = Field(default=None, max_length=64)
 
 
 class CustomerScoreResponse(BaseModel):
@@ -375,9 +385,7 @@ def create_app(
     async def add_security_and_telemetry(request: Request, call_next: Any) -> Any:
         incoming_id = (request.headers.get("X-Request-ID") or "").strip()
         request_id = (
-            incoming_id
-            if _SAFE_REQ_ID_RE.match(incoming_id)
-            else f"req-{uuid.uuid4().hex[:12]}"
+            incoming_id if _SAFE_REQ_ID_RE.match(incoming_id) else f"req-{uuid.uuid4().hex[:12]}"
         )
         token = request_id_ctx.set(request_id)
         started = time.perf_counter()
@@ -482,9 +490,10 @@ def create_app(
             application.state.model_bundle = bundle
             application.state.schema_mismatch_error = skew_err
         if application.state.schema_mismatch_error is not None:
+            skew_err_msg = application.state.schema_mismatch_error
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=f"Model schema skew guard blocked inference: {application.state.schema_mismatch_error}",
+                detail=f"Model schema skew guard blocked inference: {skew_err_msg}",
             )
         if bundle is None:
             raise HTTPException(
@@ -727,6 +736,21 @@ def create_app(
     ) -> CustomerScoreResponse:
         return await _score_single_impl(payload, request, db, auth)
 
+    @application.post("/api/v1/customers/counterfactual")
+    async def counterfactual_customer_route(
+        payload: CounterfactualRequest,
+        request: Request,
+        _auth: AuthContext = Depends(require_roles("admin", "analyst", "viewer")),
+    ) -> dict[str, Any]:
+        enforce_rate_limit(request, scope="score", max_requests=120, window_seconds=60)
+        bundle = _require_bundle()
+        return await run_in_threadpool(
+            compute_counterfactual_path,
+            payload.model_dump(exclude={"target_persona_key"}),
+            bundle,
+            payload.target_persona_key,
+        )
+
     async def _run_batch_scoring_with_row_validation(
         *,
         raw_rows: list[dict[str, Any]],
@@ -745,8 +769,7 @@ def create_app(
                 valid_records.append(validated.model_dump())
             except ValidationError as exc:
                 errs = [
-                    f"{'.'.join(str(part) for part in e['loc'])}: {e['msg']}"
-                    for e in exc.errors()
+                    f"{'.'.join(str(part) for part in e['loc'])}: {e['msg']}" for e in exc.errors()
                 ]
                 ref_val = raw_row.get("customer_ref") if isinstance(raw_row, dict) else None
                 row_errors.append(
@@ -925,15 +948,11 @@ def create_app(
             ref_raw = row.get("customer_ref") or row.get("CustomerID")
             normalized_rows.append(
                 {
-                    "customer_ref": (
-                        None if pd.isna(ref_raw) else str(ref_raw)
-                    ),
+                    "customer_ref": (None if pd.isna(ref_raw) else str(ref_raw)),
                     "gender": row.get("gender", row.get("Gender")),
                     "age": row.get("age", row.get("Age")),
                     "annual_income_k": row.get("annual_income_k", row.get("Annual Income (k$)")),
-                    "spending_score": row.get(
-                        "spending_score", row.get("Spending Score (1-100)")
-                    ),
+                    "spending_score": row.get("spending_score", row.get("Spending Score (1-100)")),
                 }
             )
         return await _run_batch_scoring_with_row_validation(
@@ -1373,6 +1392,8 @@ def create_app(
         "03_ward_dendrogram.png": "image/png",
         "04_pca_clusters.png": "image/png",
         "05_segments_3d.html": "text/html; charset=utf-8",
+        "06_age_income_spending_matrix.png": "image/png",
+        "07_algorithm_consensus_ari.png": "image/png",
     }
 
     @application.get("/api/v1/visuals/{chart_name}")

@@ -377,6 +377,132 @@ def render_all_visuals(
     fig_3d.write_html(str(p5), include_plotlyjs="cdn")
     generated.append(p5)
 
+    # 6. Multi-Projection Behavioral Matrix (Income x Spending, Age x Spending, Age x Income)
+    fig, axes = plt.subplots(1, 3, figsize=(16, 5.2), facecolor=DARK_BG)
+    fig.suptitle(
+        "Behavioral Pairwise Projections Across Age, Income & Spending Score",
+        color=TEXT_COLOR,
+        fontsize=13,
+        fontweight="bold",
+        y=0.98,
+    )
+    proj_specs = [
+        (
+            "annual_income_k",
+            "spending_score",
+            "Annual Income (k$)",
+            "Spending Score (1-100)",
+            "Income vs. Spending Score",
+            axes[0],
+        ),
+        (
+            "age",
+            "spending_score",
+            "Age (Years)",
+            "Spending Score (1-100)",
+            "Age vs. Spending Score",
+            axes[1],
+        ),
+        (
+            "age",
+            "annual_income_k",
+            "Age (Years)",
+            "Annual Income (k$)",
+            "Age vs. Annual Income",
+            axes[2],
+        ),
+    ]
+    for x_col, y_col, x_lbl, y_lbl, title_lbl, ax in proj_specs:
+        _apply_dark_axes(ax)
+        for idx, pname in enumerate(unique_personas):
+            sub = df[df["persona_name"] == pname]
+            color = PALETTE[idx % len(PALETTE)]
+            ax.scatter(
+                sub[x_col],
+                sub[y_col],
+                s=46,
+                color=color,
+                alpha=0.82,
+                edgecolors="#0F172A",
+                linewidth=0.6,
+                label=pname,
+            )
+            ax.scatter(
+                [sub[x_col].mean()],
+                [sub[y_col].mean()],
+                s=170,
+                marker="X",
+                color=color,
+                edgecolors="#FFFFFF",
+                linewidth=1.1,
+                zorder=5,
+            )
+        ax.set_xlabel(x_lbl)
+        ax.set_ylabel(y_lbl)
+        ax.set_title(title_lbl)
+    axes[0].legend(
+        facecolor=PANEL_BG,
+        edgecolor="#334155",
+        labelcolor=TEXT_COLOR,
+        fontsize=7.5,
+        loc="best",
+    )
+    plt.tight_layout(rect=(0.0, 0.0, 1.0, 0.92))
+    p6 = out_dir / "06_age_income_spending_matrix.png"
+    fig.savefig(p6, dpi=160, facecolor=DARK_BG)
+    plt.close(fig)
+    generated.append(p6)
+
+    # 7. Cross-Algorithm Adjusted Rand Index (ARI) Consensus Heatmap
+    from mall_seg.algorithms import compute_algorithm_consensus
+
+    algo_labels_map: dict[str, np.ndarray] = {
+        "K-Means++": df["cluster_id"].to_numpy(dtype=int),
+    }
+    if "agglomerative_labels" in bundle:
+        algo_labels_map["Ward"] = np.asarray(bundle["agglomerative_labels"], dtype=int)
+    if "gmm_model" in bundle and "preprocessor" in bundle:
+        X_s = bundle["preprocessor"].transform(df_features)
+        algo_labels_map["GMM"] = np.asarray(bundle["gmm_model"].predict(X_s), dtype=int)
+    if "dbscan_labels" in bundle:
+        algo_labels_map["DBSCAN"] = np.asarray(bundle["dbscan_labels"], dtype=int)
+    if "hdbscan_labels" in bundle and bundle["hdbscan_labels"] is not None:
+        algo_labels_map["HDBSCAN"] = np.asarray(bundle["hdbscan_labels"], dtype=int)
+
+    cons = compute_algorithm_consensus(algo_labels_map)
+    alg_names = cons["algorithms"]
+    ari_mat = np.array(
+        [[cons["ari_matrix"][a][b] for b in alg_names] for a in alg_names],
+        dtype=float,
+    )
+    fig, ax = plt.subplots(figsize=(7.5, 6.2), facecolor=DARK_BG)
+    _apply_dark_axes(ax)
+    ax.grid(False)
+    im_ari = ax.imshow(ari_mat, cmap="YlGnBu", vmin=0.0, vmax=1.0)
+    ax.set_xticks(range(len(alg_names)), labels=alg_names, color=TEXT_COLOR, rotation=20)
+    ax.set_yticks(range(len(alg_names)), labels=alg_names, color=TEXT_COLOR)
+    ax.set_title("Cross-Algorithm Cluster Consensus (Adjusted Rand Index)")
+    for i in range(len(alg_names)):
+        for j in range(len(alg_names)):
+            v = float(ari_mat[i, j])
+            ax.text(
+                j,
+                i,
+                f"{v:.2f}",
+                ha="center",
+                va="center",
+                color="#0F172A" if v < 0.50 else "#F8FAFC",
+                fontsize=10,
+                fontweight="bold",
+            )
+    cbar_ari = fig.colorbar(im_ari, ax=ax, fraction=0.046, pad=0.04)
+    cbar_ari.ax.tick_params(colors=MUTED_TEXT)
+    plt.tight_layout()
+    p7 = out_dir / "07_algorithm_consensus_ari.png"
+    fig.savefig(p7, dpi=160, facecolor=DARK_BG)
+    plt.close(fig)
+    generated.append(p7)
+
     return generated
 
 

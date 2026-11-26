@@ -27,15 +27,13 @@ def is_safe_webhook_url(raw_url: str) -> bool:
         return False
     try:
         ip_obj = ipaddress.ip_address(host)
-        if (
+        return not (
             ip_obj.is_private
             or ip_obj.is_loopback
             or ip_obj.is_link_local
             or ip_obj.is_reserved
             or ip_obj.is_multicast
-        ):
-            return False
-        return True
+        )
     except ValueError:
         pass
     try:

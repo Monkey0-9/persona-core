@@ -32,8 +32,96 @@ export interface SweepPoint {
   k: number;
   inertia?: number;
   silhouette?: number;
+  calinski_harabasz?: number;
+  davies_bouldin?: number;
   bic?: number;
   aic?: number;
+}
+
+export interface GenderFeatureStat {
+  gender: string;
+  feature: string;
+  count: number;
+  mean: number;
+  std: number;
+  q1: number;
+  median: number;
+  q3: number;
+}
+
+export interface GenderHypothesisTest {
+  feature: string;
+  female_mean: number;
+  male_mean: number;
+  mean_diff: number;
+  welch_t_stat: number;
+  welch_p_value: number;
+  mannwhitney_p_value: number;
+  cohens_d: number;
+  significant_at_05: boolean;
+}
+
+export interface AgeCohortStat {
+  cohort: string;
+  count: number;
+  share: number;
+  mean_income: number;
+  mean_spending: number;
+  female_share: number;
+}
+
+export interface SegmentAnalytics {
+  cluster_id: number;
+  persona_name: string;
+  persona_key: string;
+  estimated_revenue_index: number;
+  revenue_share_pct: number;
+  boundary_count: number;
+  boundary_rate_pct: number;
+  age_q25: number;
+  age_median: number;
+  age_q75: number;
+  income_q25: number;
+  income_median: number;
+  income_q75: number;
+  spending_q25: number;
+  spending_median: number;
+  spending_q75: number;
+}
+
+export interface AlgorithmConsensus {
+  algorithms: string[];
+  ari_matrix: Record<string, Record<string, number>>;
+  nmi_matrix: Record<string, Record<string, number>>;
+}
+
+export interface GenderSensitivityAudit {
+  active_mode: string;
+  silhouette_without_gender: number;
+  silhouette_with_gender: number;
+  silhouette_delta: number;
+  ari_agreement: number;
+  reassigned_customer_pct: number;
+  gender_cluster_chi2_p_value: number;
+  gender_independent_at_05: boolean;
+}
+
+export interface CounterfactualResult {
+  already_in_target: boolean;
+  current_persona_key: string;
+  current_persona_name: string;
+  target_persona_key: string;
+  target_persona_name: string;
+  delta_age: number;
+  delta_income_k: number;
+  delta_spending_score: number;
+  counterfactual_profile: {
+    age: number;
+    annual_income_k: number;
+    spending_score: number;
+  };
+  target_posterior_probability: number;
+  action_summary: string;
 }
 
 export interface PersonaProfile {
@@ -84,6 +172,7 @@ export interface AlgorithmPoint {
   ward_cluster_id: number;
   gmm_cluster_id: number;
   dbscan_cluster_id: number;
+  hdbscan_cluster_id?: number;
 }
 
 export interface SegmentsPayload {
@@ -110,6 +199,9 @@ export interface SegmentsPayload {
     pearson_matrix: Record<string, Record<string, number>>;
     spearman_matrix: Record<string, Record<string, number>>;
     correlation_highlights: CorrelationPair[];
+    gender_feature_stats?: GenderFeatureStat[];
+    gender_hypothesis_tests?: GenderHypothesisTest[];
+    age_cohorts?: AgeCohortStat[];
   };
   features: {
     feature_names: string[];
@@ -131,6 +223,7 @@ export interface SegmentsPayload {
     passed_gate: boolean;
   };
   personas: PersonaProfile[];
+  segment_analytics?: SegmentAnalytics[];
   explainability: {
     fidelity_score: number;
     max_depth: number;
@@ -141,6 +234,8 @@ export interface SegmentsPayload {
   gmm_ellipses?: GmmEllipse[];
   ward_dendrogram?: WardDendrogram;
   algorithm_points?: AlgorithmPoint[];
+  algorithm_consensus?: AlgorithmConsensus;
+  gender_sensitivity?: GenderSensitivityAudit;
 }
 
 export interface CustomerRecord {

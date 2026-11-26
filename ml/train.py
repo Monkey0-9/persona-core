@@ -41,11 +41,7 @@ def main() -> None:
         version=args.version,
         log_mlflow=args.mlflow,
     )
-    summary = {
-        k: v
-        for k, v in res.items()
-        if k not in {"bundle", "summary_payload"}
-    }
+    summary = {k: v for k, v in res.items() if k not in {"bundle", "summary_payload"}}
     summary["version_dir"] = str(Path("artifacts/models") / args.version)
     print(json.dumps(summary, indent=2))
 

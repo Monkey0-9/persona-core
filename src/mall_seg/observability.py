@@ -205,9 +205,7 @@ class MetricsRegistry:
             )
             lines.append("# TYPE mall_seg_scoring_persona_total counter")
             for persona, count in sorted(self._persona_counts.items()):
-                lines.append(
-                    f'mall_seg_scoring_persona_total{{persona="{_esc(persona)}"}} {count}'
-                )
+                lines.append(f'mall_seg_scoring_persona_total{{persona="{_esc(persona)}"}} {count}')
 
             lines.append(
                 "# HELP mall_seg_drift_alerts_total Drift evaluations reaching WARNING/CRITICAL."
@@ -233,9 +231,7 @@ class MetricsRegistry:
             if active_version:
                 lines.append("# HELP mall_seg_active_model_info Active model registry version.")
                 lines.append("# TYPE mall_seg_active_model_info gauge")
-                lines.append(
-                    f'mall_seg_active_model_info{{version="{_esc(active_version)}"}} 1'
-                )
+                lines.append(f'mall_seg_active_model_info{{version="{_esc(active_version)}"}} 1')
 
         return "\n".join(lines) + "\n"
 

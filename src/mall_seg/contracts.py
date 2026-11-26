@@ -205,10 +205,10 @@ def generate_deterministic_fixture(
     # Realistic 5-segment mixture matching Kaggle Mall Customer Segmentation geometry:
     # (count_share, age_mean, age_sd, inc_mean, inc_sd, spend_mean, spend_sd, female_prob)
     archetypes = [
-        (0.40, 42.5, 11.5, 55.0, 9.0, 49.5, 7.5, 0.59),   # Core Mainstream
-        (0.20, 32.7, 3.8, 86.5, 13.5, 82.0, 8.5, 0.54),   # Affluent VIPs
+        (0.40, 42.5, 11.5, 55.0, 9.0, 49.5, 7.5, 0.59),  # Core Mainstream
+        (0.20, 32.7, 3.8, 86.5, 13.5, 82.0, 8.5, 0.54),  # Affluent VIPs
         (0.17, 41.0, 10.5, 88.0, 14.0, 17.5, 9.0, 0.46),  # Cautious Affluent
-        (0.11, 25.2, 4.8, 26.0, 7.0, 78.5, 10.0, 0.58),   # Young Trendsetters
+        (0.11, 25.2, 4.8, 26.0, 7.0, 78.5, 10.0, 0.58),  # Young Trendsetters
         (0.12, 45.2, 12.0, 26.5, 7.5, 21.0, 10.5, 0.60),  # Budget Pragmatists
     ]
 

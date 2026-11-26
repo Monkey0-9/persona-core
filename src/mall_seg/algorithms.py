@@ -7,8 +7,14 @@ from typing import Any, Literal
 
 import numpy as np
 from scipy.cluster.hierarchy import linkage
-from sklearn.cluster import DBSCAN, AgglomerativeClustering, KMeans
-from sklearn.metrics import calinski_harabasz_score, davies_bouldin_score, silhouette_score
+from sklearn.cluster import DBSCAN, HDBSCAN, AgglomerativeClustering, KMeans
+from sklearn.metrics import (
+    adjusted_rand_score,
+    calinski_harabasz_score,
+    davies_bouldin_score,
+    normalized_mutual_info_score,
+    silhouette_score,
+)
 from sklearn.mixture import GaussianMixture
 from sklearn.neighbors import NearestNeighbors
 
@@ -18,6 +24,8 @@ class KMeansSweepPoint:
     k: int
     inertia: float
     silhouette: float
+    calinski_harabasz: float = 0.0
+    davies_bouldin: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -59,6 +67,25 @@ class ClusteringSuiteResult:
     gmm_entropy: np.ndarray
     gmm_sweep: list[GMMSweepPoint]
     benchmarks: list[AlgorithmMetrics]
+    hdbscan_labels: np.ndarray | None = None
+    hdbscan_min_cluster_size: int = 5
+    consensus: dict[str, Any] = field(default_factory=dict)
+
+
+def compute_algorithm_consensus(partitions: dict[str, np.ndarray]) -> dict[str, Any]:
+    """Compute pairwise Adjusted Rand Index (ARI) and NMI across clustering algorithms."""
+    names = list(partitions.keys())
+    ari_matrix: dict[str, dict[str, float]] = {}
+    nmi_matrix: dict[str, dict[str, float]] = {}
+    for name_a in names:
+        ari_matrix[name_a] = {}
+        nmi_matrix[name_a] = {}
+        lbl_a = partitions[name_a]
+        for name_b in names:
+            lbl_b = partitions[name_b]
+            ari_matrix[name_a][name_b] = round(float(adjusted_rand_score(lbl_a, lbl_b)), 4)
+            nmi_matrix[name_a][name_b] = round(float(normalized_mutual_info_score(lbl_a, lbl_b)), 4)
+    return {"algorithms": names, "ari_matrix": ari_matrix, "nmi_matrix": nmi_matrix}
 
 
 def compute_normalized_entropy(posteriors: np.ndarray) -> np.ndarray:
@@ -141,11 +168,15 @@ def run_clustering_suite(
         km = KMeans(n_clusters=k, init="k-means++", n_init=kmeans_n_init, random_state=seed)
         lbls = km.fit_predict(X_scaled)
         sil = float(silhouette_score(X_scaled, lbls))
+        ch = float(calinski_harabasz_score(X_scaled, lbls))
+        db = float(davies_bouldin_score(X_scaled, lbls))
         kmeans_sweep.append(
             KMeansSweepPoint(
                 k=k,
                 inertia=round(float(km.inertia_), 4),
                 silhouette=round(sil, 4),
+                calinski_harabasz=round(ch, 4),
+                davies_bouldin=round(db, 4),
             )
         )
 
@@ -167,6 +198,21 @@ def run_clustering_suite(
     dbscan_labels = dbscan_model.fit_predict(X_scaled)
     db_sil, db_ch, db_db, db_noise = safe_cluster_metrics(X_scaled, dbscan_labels)
     db_n_clusters = len([lbl for lbl in np.unique(dbscan_labels) if lbl != -1])
+
+    # 3b. HDBSCAN hierarchical density clustering (2026 density baseline)
+    hdb_min_cluster_size = max(3, min(10, len(X_scaled) // 16))
+    hdb_min_samples = min(dbscan_min_samples, hdb_min_cluster_size)
+    if len(X_scaled) >= hdb_min_cluster_size + 2:
+        hdb_model = HDBSCAN(
+            min_cluster_size=hdb_min_cluster_size,
+            min_samples=hdb_min_samples,
+            copy=True,
+        )
+        hdbscan_labels = np.asarray(hdb_model.fit_predict(X_scaled), dtype=int)
+    else:
+        hdbscan_labels = np.full(len(X_scaled), -1, dtype=int)
+    hdb_sil, hdb_ch, hdb_db, hdb_noise = safe_cluster_metrics(X_scaled, hdbscan_labels)
+    hdb_n_clusters = len([lbl for lbl in np.unique(hdbscan_labels) if lbl != -1])
 
     # 4. Gaussian Mixture Model BIC/AIC sweep + final posterior & entropy
     gmm_sweep: list[GMMSweepPoint] = []
@@ -238,7 +284,26 @@ def run_clustering_suite(
                 "mean_entropy": round(float(np.mean(gmm_entropy)), 4),
             },
         ),
+        AlgorithmMetrics(
+            algorithm="HDBSCAN (density-hierarchy)",
+            n_clusters=hdb_n_clusters,
+            silhouette=hdb_sil,
+            calinski_harabasz=hdb_ch,
+            davies_bouldin=hdb_db,
+            noise_count=hdb_noise,
+            extra={"min_cluster_size": hdb_min_cluster_size, "min_samples": hdb_min_samples},
+        ),
     ]
+
+    consensus = compute_algorithm_consensus(
+        {
+            "K-Means++": kmeans_labels,
+            "Ward": agglomerative_labels,
+            "GMM": gmm_labels,
+            "DBSCAN": dbscan_labels,
+            "HDBSCAN": hdbscan_labels,
+        }
+    )
 
     return ClusteringSuiteResult(
         kmeans_model=kmeans_model,
@@ -257,4 +322,7 @@ def run_clustering_suite(
         gmm_entropy=gmm_entropy,
         gmm_sweep=gmm_sweep,
         benchmarks=benchmarks,
+        hdbscan_labels=hdbscan_labels,
+        hdbscan_min_cluster_size=hdb_min_cluster_size,
+        consensus=consensus,
     )

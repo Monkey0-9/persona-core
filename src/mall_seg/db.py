@@ -205,9 +205,7 @@ def init_db(engine: Engine) -> None:
                 "ALTER TABLE model_versions ADD COLUMN status VARCHAR(32) DEFAULT 'active'"
             )
         if "parent_version" not in mv_cols:
-            additive_ddls.append(
-                "ALTER TABLE model_versions ADD COLUMN parent_version VARCHAR(64)"
-            )
+            additive_ddls.append("ALTER TABLE model_versions ADD COLUMN parent_version VARCHAR(64)")
         if "notes" not in mv_cols:
             additive_ddls.append("ALTER TABLE model_versions ADD COLUMN notes TEXT")
         if "promoted_at" not in mv_cols:
@@ -379,9 +377,7 @@ def upsert_model_version(
                     item.status = "archived"
 
     resolved_status = status_label or ("active" if activate else "candidate")
-    rec = session.scalar(
-        select(ModelVersionRecord).where(ModelVersionRecord.version == version)
-    )
+    rec = session.scalar(select(ModelVersionRecord).where(ModelVersionRecord.version == version))
     serialized = json.dumps(metrics)
     if rec is None:
         rec = ModelVersionRecord(
@@ -425,9 +421,7 @@ def get_active_model_version(session: Session) -> ModelVersionRecord | None:
 
 
 def get_model_version(session: Session, version: str) -> ModelVersionRecord | None:
-    return session.scalar(
-        select(ModelVersionRecord).where(ModelVersionRecord.version == version)
-    )
+    return session.scalar(select(ModelVersionRecord).where(ModelVersionRecord.version == version))
 
 
 def list_model_versions(session: Session) -> list[ModelVersionRecord]:
@@ -669,9 +663,7 @@ def record_batch_scores_and_drift(
 
 def get_latest_pipeline_run(session: Session) -> PipelineRun | None:
     stmt = (
-        select(PipelineRun)
-        .order_by(PipelineRun.created_at.desc(), PipelineRun.id.desc())
-        .limit(1)
+        select(PipelineRun).order_by(PipelineRun.created_at.desc(), PipelineRun.id.desc()).limit(1)
     )
     return session.scalar(stmt)
 
@@ -740,10 +732,7 @@ def query_scoring_events(
     total = int(session.scalar(select(func.count()).select_from(ScoringEvent)) or 0)
     rows = list(
         session.scalars(
-            select(ScoringEvent)
-            .order_by(ScoringEvent.id.desc())
-            .offset(offset)
-            .limit(limit)
+            select(ScoringEvent).order_by(ScoringEvent.id.desc()).offset(offset).limit(limit)
         ).all()
     )
     return rows, total

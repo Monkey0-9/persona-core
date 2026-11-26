@@ -91,9 +91,7 @@ def test_privacy_strip_and_gender_opt_in_features(tmp_path: Path) -> None:
     assert art_with_gender.X_scaled.shape == (200, 4)
     assert len(art_with_gender.feature_names) == 4
 
-    X_s, X_p = transform_features(
-        df_no_id.iloc[:5], art_no_gender.preprocessor, art_no_gender.pca
-    )
+    X_s, X_p = transform_features(df_no_id.iloc[:5], art_no_gender.preprocessor, art_no_gender.pca)
     assert X_s.shape == (5, 3)
     assert X_p.shape == (5, 2)
 
@@ -106,3 +104,6 @@ def test_eda_report_outputs(tmp_path: Path) -> None:
     total_share = sum(report.gender_breakdown.shares.values())
     assert pytest.approx(total_share, abs=1e-3) == 1.0
     assert len(report.correlation_highlights) == 3
+    assert len(report.gender_hypothesis_tests) == 3
+    assert len(report.gender_feature_stats) == 6
+    assert len(report.age_cohorts) >= 3

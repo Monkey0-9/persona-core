@@ -100,9 +100,7 @@ def register_candidate_model(
             "privacy": cfg.privacy.model_copy(
                 update={
                     "include_gender": (
-                        cfg.privacy.include_gender
-                        if include_gender is None
-                        else include_gender
+                        cfg.privacy.include_gender if include_gender is None else include_gender
                     )
                 }
             ),
@@ -195,9 +193,7 @@ def activate_or_rollback_version(
             raise ValueError("Target version is required for promotion.")
         versions = list_model_versions(session)
         candidates = [
-            v
-            for v in versions
-            if current_active is None or v.version != current_active.version
+            v for v in versions if current_active is None or v.version != current_active.version
         ]
         # Prefer parent_version when set, otherwise most recent non-active version
         fallback = None

@@ -17,6 +17,9 @@ import numpy as np
 import pandas as pd
 from scipy.cluster.hierarchy import dendrogram
 from scipy.optimize import linear_sum_assignment
+from scipy.stats import chi2_contingency
+from sklearn.cluster import KMeans
+from sklearn.metrics import adjusted_rand_score, silhouette_score
 from sqlalchemy.engine import Engine
 
 from mall_seg.algorithms import compute_normalized_entropy, run_clustering_suite
@@ -408,6 +411,209 @@ def score_customer_records(
     return predictions
 
 
+def compute_counterfactual_path(
+    record: dict[str, Any],
+    model_bundle: dict[str, Any],
+    target_persona_key: str | None = None,
+) -> dict[str, Any]:
+    """Find the minimum feature perturbation to transition a customer to a target persona."""
+    personas: dict[int, PersonaProfile] = model_bundle["personas"]
+    current_pred = score_customer_records([record], model_bundle)[0]
+
+    # Pick target persona: explicit key, else Affluent VIPs (or highest spending persona)
+    sorted_personas = sorted(
+        personas.values(),
+        key=lambda p: p.mean_income * p.mean_spending,
+        reverse=True,
+    )
+    target_prof: PersonaProfile | None = None
+    if target_persona_key:
+        target_prof = next(
+            (p for p in personas.values() if p.persona_key == target_persona_key),
+            None,
+        )
+    if target_prof is None:
+        target_prof = next(
+            (p for p in personas.values() if p.persona_key == "affluent_vip"),
+            None,
+        )
+    if target_prof is None or target_prof.cluster_id == current_pred.cluster_id:
+        target_prof = next(
+            (p for p in sorted_personas if p.cluster_id != current_pred.cluster_id),
+            sorted_personas[0],
+        )
+
+    if target_prof.cluster_id == current_pred.cluster_id:
+        return {
+            "already_in_target": True,
+            "current_persona_key": current_pred.persona_key,
+            "current_persona_name": current_pred.persona_name,
+            "target_persona_key": target_prof.persona_key,
+            "target_persona_name": target_prof.persona_name,
+            "delta_age": 0,
+            "delta_income_k": 0.0,
+            "delta_spending_score": 0.0,
+            "counterfactual_profile": {
+                "age": current_pred.age,
+                "annual_income_k": current_pred.annual_income_k,
+                "spending_score": current_pred.spending_score,
+            },
+            "target_posterior_probability": current_pred.gmm_confidence,
+            "action_summary": "Customer already belongs to the target high-value persona.",
+        }
+
+    # Interpolate toward the target centroid until cluster flips & confidence >= 0.70
+    base_age = float(record["age"])
+    base_inc = float(record["annual_income_k"])
+    base_sp = float(record["spending_score"])
+    tgt_age = float(target_prof.mean_age)
+    tgt_inc = float(target_prof.mean_income)
+    tgt_sp = float(target_prof.mean_spending)
+
+    best_candidate: dict[str, Any] | None = None
+    for step in range(5, 105, 5):
+        alpha = step / 100.0
+        cand_age = int(np.clip(round(base_age + alpha * (tgt_age - base_age)), 16, 100))
+        cand_inc = round(float(np.clip(base_inc + alpha * (tgt_inc - base_inc), 5.0, 500.0)), 1)
+        cand_sp = round(float(np.clip(base_sp + alpha * (tgt_sp - base_sp), 1.0, 100.0)), 1)
+        cand_rec = {
+            "customer_ref": record.get("customer_ref"),
+            "gender": record["gender"],
+            "age": cand_age,
+            "annual_income_k": cand_inc,
+            "spending_score": cand_sp,
+        }
+        cand_pred = score_customer_records([cand_rec], model_bundle)[0]
+        tgt_prob = cand_pred.posterior_probabilities.get(target_prof.persona_name, 0.0)
+        if cand_pred.cluster_id == target_prof.cluster_id:
+            best_candidate = {
+                "pred": cand_pred,
+                "age": cand_age,
+                "income": cand_inc,
+                "spending": cand_sp,
+                "tgt_prob": tgt_prob,
+            }
+            if tgt_prob >= 0.70:
+                break
+
+    if best_candidate is None:
+        cand_age = int(np.clip(round(tgt_age), 16, 100))
+        cand_inc = round(float(np.clip(tgt_inc, 5.0, 500.0)), 1)
+        cand_sp = round(float(np.clip(tgt_sp, 1.0, 100.0)), 1)
+        cand_pred = score_customer_records(
+            [
+                {
+                    "gender": record["gender"],
+                    "age": cand_age,
+                    "annual_income_k": cand_inc,
+                    "spending_score": cand_sp,
+                }
+            ],
+            model_bundle,
+        )[0]
+        best_candidate = {
+            "pred": cand_pred,
+            "age": cand_age,
+            "income": cand_inc,
+            "spending": cand_sp,
+            "tgt_prob": cand_pred.posterior_probabilities.get(target_prof.persona_name, 0.0),
+        }
+
+    d_age = int(best_candidate["age"] - int(round(base_age)))
+    d_inc = round(float(best_candidate["income"]) - base_inc, 1)
+    d_sp = round(float(best_candidate["spending"]) - base_sp, 1)
+    levers: list[str] = []
+    if abs(d_sp) >= 1.0:
+        levers.append(f"Spending Score {d_sp:+.1f} pts")
+    if abs(d_inc) >= 1.0:
+        levers.append(f"Annual Income {d_inc:+.1f}k$")
+    if abs(d_age) >= 1:
+        levers.append(f"Age {d_age:+d} yrs")
+    lever_str = ", ".join(levers) if levers else "minimal profile shift"
+
+    return {
+        "already_in_target": False,
+        "current_persona_key": current_pred.persona_key,
+        "current_persona_name": current_pred.persona_name,
+        "target_persona_key": target_prof.persona_key,
+        "target_persona_name": target_prof.persona_name,
+        "delta_age": d_age,
+        "delta_income_k": d_inc,
+        "delta_spending_score": d_sp,
+        "counterfactual_profile": {
+            "age": best_candidate["age"],
+            "annual_income_k": best_candidate["income"],
+            "spending_score": best_candidate["spending"],
+        },
+        "target_posterior_probability": round(float(best_candidate["tgt_prob"]), 4),
+        "action_summary": (
+            f"Transition from {current_pred.persona_name} to {target_prof.persona_name} "
+            f"requires {lever_str} "
+            f"(target confidence {float(best_candidate['tgt_prob']) * 100:.1f}%)."
+        ),
+    }
+
+
+def evaluate_gender_sensitivity_audit(
+    raw_df: pd.DataFrame,
+    *,
+    target_k: int,
+    kmeans_n_init: int,
+    seed: int,
+    active_labels: np.ndarray,
+    active_include_gender: bool,
+) -> dict[str, Any]:
+    """Compare clustering stability & independence with Gender excluded vs included."""
+    df_no_id = strip_customer_id(raw_df)
+    feats_no_g = fit_transform_features(
+        df_no_id=df_no_id, include_gender=False, pca_components=2, seed=seed
+    )
+    feats_with_g = fit_transform_features(
+        df_no_id=df_no_id, include_gender=True, pca_components=2, seed=seed
+    )
+    km_no_g = KMeans(
+        n_clusters=target_k, init="k-means++", n_init=kmeans_n_init, random_state=seed
+    ).fit_predict(feats_no_g.X_scaled)
+    km_with_g = KMeans(
+        n_clusters=target_k, init="k-means++", n_init=kmeans_n_init, random_state=seed
+    ).fit_predict(feats_with_g.X_scaled)
+
+    sil_no_g = round(float(silhouette_score(feats_no_g.X_scaled, km_no_g)), 4)
+    sil_with_g = round(float(silhouette_score(feats_with_g.X_scaled, km_with_g)), 4)
+    ari = round(float(adjusted_rand_score(km_no_g, km_with_g)), 4)
+
+    # Optimal label alignment to compute exact reassignment rate
+    u_a = sorted(int(c) for c in np.unique(km_no_g))
+    u_b = sorted(int(c) for c in np.unique(km_with_g))
+    overlap = np.zeros((len(u_a), len(u_b)), dtype=np.float64)
+    for i, ca in enumerate(u_a):
+        for j, cb in enumerate(u_b):
+            overlap[i, j] = float(np.sum((km_no_g == ca) & (km_with_g == cb)))
+    r_ind, c_ind = linear_sum_assignment(-overlap)
+    matched = int(sum(overlap[r, c] for r, c in zip(r_ind, c_ind, strict=True)))
+    reassigned_pct = round((1.0 - matched / max(len(raw_df), 1)) * 100.0, 2)
+
+    # Chi-square test of Gender independence across active clusters
+    ct = pd.crosstab(
+        pd.Series(active_labels, name="cluster"), raw_df["Gender"].reset_index(drop=True)
+    )
+    chi2_p = 1.0
+    if ct.shape[0] >= 2 and ct.shape[1] >= 2:
+        _, p_val, _, _ = chi2_contingency(ct)
+        chi2_p = round(float(np.nan_to_num(p_val, nan=1.0)), 4)
+
+    return {
+        "active_mode": "included" if active_include_gender else "profiling_only",
+        "silhouette_without_gender": sil_no_g,
+        "silhouette_with_gender": sil_with_g,
+        "silhouette_delta": round(sil_with_g - sil_no_g, 4),
+        "ari_agreement": ari,
+        "reassigned_customer_pct": reassigned_pct,
+        "gender_cluster_chi2_p_value": chi2_p,
+        "gender_independent_at_05": chi2_p >= 0.05,
+    }
+
+
 class ModelSchemaMismatchError(RuntimeError):
     """Raised when a persisted model bundle fails the training-serving schema hash guard."""
 
@@ -425,9 +631,9 @@ def compute_feature_schema_payload(cfg: AppConfig, model_version: str = "v1.0.0"
         "pca_components": cfg.features.pca_components,
         "target_k": cfg.clustering.target_k,
     }
-    schema_hash = hashlib.sha256(
-        json.dumps(payload, sort_keys=True).encode("utf-8")
-    ).hexdigest()[:16]
+    schema_hash = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()[
+        :16
+    ]
     payload["feature_schema_hash"] = schema_hash
     return payload
 
@@ -472,7 +678,9 @@ def verify_bundle_schema_compatibility(
         )
 
     if strict_config is not None:
-        expected_runtime = compute_feature_schema_payload(strict_config, model_version=model_version)
+        expected_runtime = compute_feature_schema_payload(
+            strict_config, model_version=model_version
+        )
         if not hmac.compare_digest(saved_hash, str(expected_runtime["feature_schema_hash"])):
             raise ModelSchemaMismatchError(
                 f"Runtime config schema mismatch: bundle={saved_hash} != "
@@ -655,10 +863,16 @@ def execute_segmentation_workflow(
     ward_to_km = {ward_unique[int(r)]: km_unique[int(c)] for r, c in zip(w_row, w_col, strict=True)}
 
     algorithm_points: list[dict[str, Any]] = []
+    hdb_arr = (
+        suite.hdbscan_labels
+        if suite.hdbscan_labels is not None
+        else np.full(len(scored_rows), -1, dtype=int)
+    )
     for idx, row_dict in enumerate(scored_rows):
         w_raw = int(suite.agglomerative_labels[idx])
         g_raw = int(suite.gmm_labels[idx])
         d_raw = int(suite.dbscan_labels[idx])
+        h_raw = int(hdb_arr[idx])
         algorithm_points.append(
             {
                 "customer_ref": row_dict["customer_ref"],
@@ -666,6 +880,57 @@ def execute_segmentation_workflow(
                 "ward_cluster_id": ward_to_km.get(w_raw, w_raw),
                 "gmm_cluster_id": gmm_to_km.get(g_raw, g_raw),
                 "dbscan_cluster_id": d_raw,
+                "hdbscan_cluster_id": h_raw,
+            }
+        )
+
+    gender_sensitivity = evaluate_gender_sensitivity_audit(
+        raw_df=raw_df,
+        target_k=cfg.clustering.target_k,
+        kmeans_n_init=cfg.clustering.kmeans_n_init,
+        seed=cfg.clustering.seed,
+        active_labels=suite.kmeans_labels,
+        active_include_gender=cfg.privacy.include_gender,
+    )
+
+    total_rev_idx = sum(
+        (p.mean_income * (p.mean_spending / 100.0)) * p.customer_count for p in personas.values()
+    )
+    segment_analytics: list[dict[str, Any]] = []
+    for cid in sorted(personas.keys()):
+        prof = personas[cid]
+        mask = suite.kmeans_labels == cid
+        sub = raw_df.loc[mask]
+        b_cnt = sum(1 for i, r in enumerate(scored_rows) if mask[i] and r["is_boundary_customer"])
+        rev_idx = round((prof.mean_income * (prof.mean_spending / 100.0)) * prof.customer_count, 2)
+        segment_analytics.append(
+            {
+                "cluster_id": cid,
+                "persona_name": prof.persona_name,
+                "persona_key": prof.persona_key,
+                "estimated_revenue_index": rev_idx,
+                "revenue_share_pct": round((rev_idx / max(total_rev_idx, 1e-6)) * 100.0, 2),
+                "boundary_count": b_cnt,
+                "boundary_rate_pct": round((b_cnt / max(prof.customer_count, 1)) * 100.0, 2),
+                "age_q25": round(float(sub["Age"].astype(float).quantile(0.25)), 1),
+                "age_median": round(float(sub["Age"].astype(float).median()), 1),
+                "age_q75": round(float(sub["Age"].astype(float).quantile(0.75)), 1),
+                "income_q25": round(
+                    float(sub["Annual Income (k$)"].astype(float).quantile(0.25)), 1
+                ),
+                "income_median": round(float(sub["Annual Income (k$)"].astype(float).median()), 1),
+                "income_q75": round(
+                    float(sub["Annual Income (k$)"].astype(float).quantile(0.75)), 1
+                ),
+                "spending_q25": round(
+                    float(sub["Spending Score (1-100)"].astype(float).quantile(0.25)), 1
+                ),
+                "spending_median": round(
+                    float(sub["Spending Score (1-100)"].astype(float).median()), 1
+                ),
+                "spending_q75": round(
+                    float(sub["Spending Score (1-100)"].astype(float).quantile(0.75)), 1
+                ),
             }
         )
 
@@ -679,6 +944,7 @@ def execute_segmentation_workflow(
         "personas": [
             prof.to_dict() for prof in sorted(personas.values(), key=lambda p: p.cluster_id)
         ],
+        "segment_analytics": segment_analytics,
         "explainability": explainability.to_dict(),
         "gmm_ellipses": gmm_ellipses,
         "ward_dendrogram": {
@@ -688,6 +954,8 @@ def execute_segmentation_workflow(
             "cut_height": round(cut_height, 4),
         },
         "algorithm_points": algorithm_points,
+        "algorithm_consensus": suite.consensus,
+        "gender_sensitivity": gender_sensitivity,
         "dbscan_eps": round(float(suite.dbscan_eps), 4),
         "entropy_threshold": cfg.clustering.entropy_threshold,
         "boundary_customer_count": sum(1 for r in scored_rows if r["is_boundary_customer"]),
@@ -770,6 +1038,7 @@ def execute_segmentation_workflow(
         "ward_linkage_matrix": suite.ward_linkage_matrix,
         "dbscan_labels": suite.dbscan_labels,
         "dbscan_eps": suite.dbscan_eps,
+        "hdbscan_labels": suite.hdbscan_labels,
         "personas": personas,
         "entropy_threshold": cfg.clustering.entropy_threshold,
         "baseline_distributions": baseline_distributions,

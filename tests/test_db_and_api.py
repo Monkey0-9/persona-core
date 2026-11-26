@@ -14,6 +14,7 @@ from mall_seg.algorithms import compute_normalized_entropy, run_clustering_suite
 from mall_seg.api import create_app
 from mall_seg.contracts import (
     NUMERIC_FEATURE_COLUMNS,
+    AppConfig,
     generate_deterministic_fixture,
     strip_customer_id,
 )
@@ -31,7 +32,7 @@ from mall_seg.db import (
 from mall_seg.eda import compute_eda_report
 from mall_seg.explainability import fit_surrogate_explainer
 from mall_seg.features import fit_transform_features
-from mall_seg.personas import map_clusters_to_personas
+from mall_seg.personas import compute_feature_schema_payload, map_clusters_to_personas
 from mall_seg.stability import evaluate_kmeans_stability
 
 
@@ -126,8 +127,14 @@ def seeded_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[TestCli
         assert session.scalar(select(func.count()).select_from(PipelineRun)) == 1
         assert session.scalar(select(func.count()).select_from(ScoredCustomer)) == 120
 
+    cfg = AppConfig()
+    schema_payload = compute_feature_schema_payload(cfg, model_version="v1.0.0")
     bundle = {
         "run_key": "test-run-001",
+        "model_version": "v1.0.0",
+        "feature_schema_hash": schema_payload["feature_schema_hash"],
+        "config": cfg.model_dump(),
+        "feature_summary": {"feature_names": schema_payload["feature_names"]},
         "preprocessor": feats.preprocessor,
         "pca": feats.pca,
         "kmeans_model": suite.kmeans_model,
@@ -206,6 +213,24 @@ def test_score_batch_and_customers_endpoints(seeded_env: tuple[TestClient, str, 
     assert isinstance(s_data["is_boundary_customer"], bool)
     assert pytest.approx(sum(s_data["posterior_probabilities"].values()), abs=1e-2) == 1.0
 
+    # Counterfactual transition simulator
+    cf_resp = client.post(
+        "/api/v1/customers/counterfactual",
+        headers=headers,
+        json={
+            "customer_ref": "CF-01",
+            "gender": "Female",
+            "age": 46,
+            "annual_income_k": 24.0,
+            "spending_score": 18.0,
+            "target_persona_key": "affluent_vip",
+        },
+    )
+    assert cf_resp.status_code == 200
+    cf_data = cf_resp.json()
+    assert cf_data["target_persona_key"] == "affluent_vip"
+    assert "action_summary" in cf_data
+
     # Valid batch score
     batch_payload = {
         "customers": [
@@ -232,7 +257,7 @@ def test_score_batch_and_customers_endpoints(seeded_env: tuple[TestClient, str, 
 
     events_hist = client.get("/api/v1/scoring-events?limit=10&offset=0", headers=headers)
     assert events_hist.status_code == 200
-    assert events_hist.json()["total"] == 1
+    assert events_hist.json()["total"] == 4
 
     bad_vis = client.get("/api/v1/visuals/../../etc/passwd", headers=headers)
     assert bad_vis.status_code == 404
@@ -241,7 +266,7 @@ def test_score_batch_and_customers_endpoints(seeded_env: tuple[TestClient, str, 
     engine = create_db_engine(db_url)
     factory = get_session_factory(engine)
     with session_scope(factory) as session:
-        assert session.scalar(select(func.count()).select_from(ScoringEvent)) == 1
+        assert session.scalar(select(func.count()).select_from(ScoringEvent)) == 4
         assert session.scalar(select(func.count()).select_from(DriftReportRecord)) == 1
 
 

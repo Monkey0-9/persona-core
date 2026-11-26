@@ -2,6 +2,7 @@ import type {
   ActiveModelMetadata,
   AuthSession,
   BatchCustomersResponse,
+  CounterfactualResult,
   CustomerRecord,
   DriftReportItem,
   HealthStatus,
@@ -194,6 +195,19 @@ export const apiClient = {
       },
       assertScoreResult
     ),
+  getCounterfactual: (payload: {
+    customer_ref?: string;
+    gender: 'Female' | 'Male';
+    age: number;
+    annual_income_k: number;
+    spending_score: number;
+    target_persona_key?: string;
+  }) =>
+    apiFetch<CounterfactualResult>('/api/v1/customers/counterfactual', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
   batchScore: (customers: {
     customer_ref?: string;
     gender: 'Female' | 'Male';
