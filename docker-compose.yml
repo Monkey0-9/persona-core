@@ -1,0 +1,64 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: mall_seg
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mall_seg_dev_password}
+      POSTGRES_DB: mall_seg
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mall_seg -d mall_seg"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  api:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      ENV: production
+      DATABASE_URL: postgresql+psycopg://mall_seg:${POSTGRES_PASSWORD:-mall_seg_dev_password}@db:5432/mall_seg
+      REDIS_URL: redis://redis:6379/0
+      API_KEY: ${API_KEY}
+      JWT_SECRET: ${JWT_SECRET}
+      CORS_ORIGINS: http://localhost:3000,http://localhost:5173,http://localhost:8501
+      MALL_SEG_CONFIG: /app/configs/pipeline_config.yaml
+      DRIFT_ALERT_WEBHOOK_URL: ${DRIFT_ALERT_WEBHOOK_URL:-}
+    ports:
+      - "8010:8010"
+    volumes:
+      - artifacts_data:/app/artifacts
+    command: >
+      sh -c "alembic upgrade head && python ml/train.py && python scripts/run_pipeline.py --render-visuals && uvicorn mall_seg.api:app --host 0.0.0.0 --port 8010"
+
+  ui:
+    build: .
+    depends_on:
+      - api
+    environment:
+      API_URL: http://api:8010
+      API_KEY: ${API_KEY}
+    ports:
+      - "8501:8501"
+    command: ["streamlit", "run", "app/dashboard.py", "--server.port=8501", "--server.address=0.0.0.0"]
+
+volumes:
+  pgdata:
+  artifacts_data:

@@ -1,0 +1,23 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { createRoot } from 'react-dom/client';
+import App from './App.tsx';
+import { ErrorBoundary } from './components/ErrorBoundary.tsx';
+import './index.css';
+
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 30_000,
+      retry: 1,
+      refetchOnWindowFocus: false,
+    },
+  },
+});
+
+createRoot(document.getElementById('root')!).render(
+  <QueryClientProvider client={queryClient}>
+    <ErrorBoundary title="Application Shell Error">
+      <App />
+    </ErrorBoundary>
+  </QueryClientProvider>
+);

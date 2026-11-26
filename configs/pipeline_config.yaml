@@ -1,0 +1,54 @@
+# Centralized configuration for the Mall Customer Segmentation Engine
+data:
+  primary_path: "data/raw/Mall_Customers.csv"
+  fallback_path: "tests/fixtures/mall_customers_sample.csv"
+  min_rows: 50
+
+privacy:
+  include_gender: false
+  strip_identifier: true
+  log_raw_payloads: false
+
+features:
+  numeric_columns:
+    - "Age"
+    - "Annual Income (k$)"
+    - "Spending Score (1-100)"
+  categorical_columns:
+    - "Gender"
+  pca_components: 2
+
+clustering:
+  seed: 42
+  target_k: 5
+  k_min: 2
+  k_max: 10
+  kmeans_n_init: 50
+  dbscan_min_samples: 5
+  gmm_covariance_type: "full"
+  entropy_threshold: 0.45
+
+stability:
+  bootstrap_iterations: 100
+  bootstrap_n_init: 20
+  min_jaccard_stability: 0.70
+
+drift:
+  bins: 10
+  stable_threshold: 0.10
+  monitor_threshold: 0.25
+
+explainability:
+  max_depth: 3
+
+artifacts:
+  model_bundle_path: "artifacts/model_bundle.joblib"
+  visuals_dir: "artifacts/visuals"
+  frontend_snapshot_path: "public/artifacts/dashboard_snapshot.json"
+  mlflow_tracking_uri: "sqlite:///artifacts/mlflow.db"
+  mlflow_experiment: "mall_customer_segmentation"
+
+api:
+  max_batch_size: 1000
+  default_limit: 50
+  max_limit: 500

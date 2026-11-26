@@ -1,0 +1,30 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --canvas: #f7f6f2;
+    --surface: #ffffff;
+    --surface-subtle: #f1efe9;
+    --border-hairline: #e4e2dc;
+    --ink-primary: #141413;
+    --ink-secondary: #5c5b56;
+    --ink-muted: #8a8880;
+    --accent-cobalt: #1e40af;
+  }
+
+  body {
+    font-family: "DM Sans", system-ui, -apple-system, sans-serif;
+    background-color: var(--canvas);
+    color: var(--ink-primary);
+  }
+
+  h1, h2, h3, h4 {
+    font-family: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
+    letter-spacing: -0.02em;
+  }
+
+  .font-mono-tabular {
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-variant-numeric: tabular-nums;
+  }
+}

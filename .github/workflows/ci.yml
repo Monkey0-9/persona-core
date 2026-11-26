@@ -1,0 +1,133 @@
+name: CI Quality, Security & Integration Gates
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+permissions:
+  contents: read
+
+jobs:
+  ml-and-backend:
+    name: ML, Typecheck & Postgres/Redis Integration Tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: mall_seg
+          POSTGRES_PASSWORD: ci_postgres_password
+          POSTGRES_DB: mall_seg
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U mall_seg -d mall_seg"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install Python dependencies & psycopg driver
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]" "psycopg[binary]>=3.2.0" "alembic>=1.14.0" "redis>=5.2.0"
+
+      - name: Ruff lint & format check
+        run: |
+          ruff check src ml pipelines scripts app tests
+          ruff format --check src ml pipelines scripts app tests
+
+      - name: Mypy static type check
+        run: mypy src ml
+
+      - name: Run Alembic migrations against PostgreSQL
+        env:
+          DATABASE_URL: postgresql+psycopg://mall_seg:ci_postgres_password@127.0.0.1:5432/mall_seg
+        run: alembic upgrade head
+
+      - name: Run unit & integration test suite against PostgreSQL + Redis
+        env:
+          DATABASE_URL: postgresql+psycopg://mall_seg:ci_postgres_password@127.0.0.1:5432/mall_seg
+          REDIS_URL: redis://127.0.0.1:6379/0
+          API_KEY: ci-ephemeral-api-key
+          JWT_SECRET: ci-ephemeral-jwt-signing-key-32bytes
+        run: pytest -v --cov=mall_seg
+
+  frontend:
+    name: Frontend Typecheck, ESLint & Vite Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: TypeScript type check
+        run: npx tsc --noEmit
+
+      - name: ESLint check
+        run: npx eslint src server.ts
+
+      - name: Production frontend build
+        run: npm run build
+
+  security-and-containers:
+    name: Secret Scan, Dependency Audit & Docker Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Secret scanning with Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Validate docker-compose configuration
+        env:
+          POSTGRES_PASSWORD: ci_postgres_password
+          API_KEY: ci-ephemeral-api-key
+          JWT_SECRET: ci-ephemeral-jwt-signing-key-32bytes
+        run: docker compose config --quiet
+
+      - name: Audit Python and Node dependencies
+        run: |
+          python -m pip install --upgrade pip pip-audit
+          pip-audit --strict || true
+          npm audit --audit-level=high || true
+
+      - name: Build production Docker image & verify non-root user
+        run: |
+          docker build -t mall-seg-api:ci .
+          USER_ID=$(docker run --rm --entrypoint id mall-seg-api:ci -u)
+          echo "Container UID=$USER_ID"
+          test "$USER_ID" != "0"

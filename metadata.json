@@ -1,0 +1,6 @@
+{
+  "name": "Mall Customer Segmentation",
+  "description": "End-to-end production customer segmentation platform with privacy-minimized clustering, bootstrap stability gating, GMM uncertainty scoring, and PSI drift monitoring.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
